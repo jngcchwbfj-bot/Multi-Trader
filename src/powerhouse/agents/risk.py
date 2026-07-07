@@ -64,7 +64,16 @@ class RiskAgent(BaseAgent[list[RiskDecision]]):
                 and per_trade_passed
             )
 
-            reason = "Execution disabled" if not policy.allow_execution else "Plan approved"
+            if not policy.allow_execution:
+                reason = "Execution disabled"
+            elif not daily_loss_passed:
+                reason = "Daily loss cap exceeded"
+            elif not exposure_passed:
+                reason = "Long exposure cap exceeded"
+            elif not per_trade_passed:
+                reason = "Per-trade risk limit exceeded"
+            else:
+                reason = "Plan approved"
 
             adjusted_quantity = plan.quantity if approved else 0
 
