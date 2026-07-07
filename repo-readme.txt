@@ -1,0 +1,260 @@
+# Financial Powerhouse
+
+A Python-first, multi-agent day-trading system with human-in-the-loop approval gates, deterministic risk management, and full backtesting support.
+
+## Status: Phase 3 - Broker Abstraction + Overlapping Backtests
+
+**Live trading is still not implemented.** Phase 3 builds on the Phase 2 real
+backtest/local-data system by adding a broker adapter boundary (paper-only),
+richer backtest realism, and a documented artifact contract for an external
+dashboard - without wiring any real order routing:
+
+- A `Broker` abstraction (`src/powerhouse/brokers/`) with an in-memory
+  `PaperBroker` - no network calls, no live broker exists yet.
+- `ExecutionAgent` now routes every approved plan through a broker
+  (`PaperBroker` by default); `mode=live` is refused outright.
+- An opt-in overlapping-positions backtest mode
+  (`src/powerhouse/backtest/positions.py`) that can hold multiple concurrent
+  positions per symbol and across symbols over multiple days, alongside the
+  original Phase 2 "resolve on open" engine (still the default).
+- A documented, dashboard-ready artifact contract - see
+  [`docs/artifacts.md`](docs/artifacts.md).
+- A new `run-paper-session` CLI command that exercises the `PaperBroker`,
+  still gated by the same `ExecutionPolicy` used everywhere else.
+
+Phase 2 capabilities remain unchanged: a true historical replay/simulation
+engine, a local Parquet + DuckDB data layer, typed YAML configuration,
+deterministic scanner/strategy/risk logic, daily loss cap enforcement, and
+phase-aware behavior.
+
+See [`docs/backtesting.md`](docs/backtesting.md) for backtest assumptions and
+limitations, [`docs/risk-policy.md`](docs/risk-policy.md) for the risk model,
+and [`docs/artifacts.md`](docs/artifacts.md) for the artifact contract.
+
+## Quick Start
+
+### Prerequisites
+
+- Python 3.12 or later
+- `uv` package manager ([install](https://github.com/astral-sh/uv))
+
+### Setup
+
+```bash
+uv sync
+```
+
+### Validate Installation
+
+```bash
+uv run powerhouse healthcheck
+uv run powerhouse smoke-test
+```
+
+### Run a Sample Backtest
+
+```bash
+# 1. Ingest the committed synthetic CSV fixtures into local Parquet
+uv run powerhouse ingest-fixtures
+
+# 2. Run a real historical replay over the fixture data
+uv run powerhouse run-backtest --symbols AAPL,MSFT,NVDA \
+    --start-date 2026-04-01 --end-date 2026-05-26 --phase open
+
+# 3. Rebuild a markdown report from the written JSONL artifact
+uv run powerhouse build-report data/backtests/runs/<backtest_id>.jsonl
+```
+
+### Run a Session (single point-in-time pipeline pass)
+
+```bash
+uv run powerhouse run-session --mode backtest --phase premarket
+```
+
+### Run a Paper Session (routed through the in-memory PaperBroker)
+
+```bash
+uv run powerhouse run-paper-session --phase open --enable-execution
+```
+
+### Run Tests
+
+```bash
+uv run pytest
+uv run pytest --cov=powerhouse --cov-report=html  # with coverage
+```
+
+Tests are entirely network-free: they use the committed synthetic CSV
+fixtures under `data/raw/ohlcv/` (auto-ingested into a scratch `data/curated`
+by `tests/conftest.py`) and `data/raw/catalysts.csv`.
+
+## Operating Modes
+
+- **backtest**: Real historical replay via `powerhouse.backtest.BacktestEngine`.
+  Optionally models overlapping positions (`--overlapping-positions`) - see
+  [`docs/backtesting.md`](docs/backtesting.md).
+- **paper**: Same deterministic agent pipeline as `backtest`, run for a single
+  point in time via `run-session` or `run-paper-session`. Since Phase 3,
+  `run-paper-session` routes approved plans through an in-memory
+  `PaperBroker` (`src/powerhouse/brokers/`); both commands still simulate a
+  no-fill/pending outcome since there's no forward market data to replay
+  against a single point in time.
+- **live**: **Not implemented.** No live broker adapter exists; `ExecutionAgent`
+  refuses to execute anything when `mode=live`, independent of
+  `allow_execution`, and no command in this repo ever sets `mode=live`.
+
+## Market Phases
+
+The system understands Eastern Time market phases, with weekend/off-hours
+awareness (Saturdays and Sundays always resolve to `closed`):
+
+- **premarket**: 4:00 AM – 9:30 AM ET
+- **open**: 9:30 AM – 12:00 PM ET
+- **midday**: 12:00 PM – 3:00 PM ET
+- **power_hour**: 3:00 PM – 4:00 PM ET
+- **end_of_day**: 4:00 PM – 5:00 PM ET
+- **closed**: All other times, and all weekends
+
+Each phase has a `PhaseProfile` (`core/phase_router.py`) controlling scan
+aggressiveness, max concurrent positions, and a per-trade risk multiplier -
+e.g. `end_of_day`/`closed` draft zero new trade plans, `open` is the most
+aggressive, `premarket` allows a couple of smaller "planning" positions.
+
+## Local Data Layout
+
+```
+data/
+├── raw/
+│   ├── ohlcv/*.csv       # Committed synthetic OHLCV fixtures (date,open,high,low,close,volume)
+│   └── catalysts.csv     # Committed structured catalyst fixture (ticker,catalyst_type,summary,sentiment,confidence)
+├── curated/*.parquet     # Generated by `ingest-fixtures` - gitignored, rebuild anytime
+├── staged/               # Reserved for future intermediate transforms
+├── backtests/
+│   ├── sessions/         # Per-session JSONL/Parquet artifacts (run-session)
+│   └── runs/             # Per-backtest JSONL/Parquet artifacts (run-backtest)
+└── memory/
+    ├── sessions/*.json   # One record per run-session invocation
+    └── backtests/*.json  # One record per run-backtest invocation
+```
+
+`data/raw/ohlcv/*.csv` and `data/raw/catalysts.csv` are small, deterministic,
+synthetic fixtures - not real market data - and are the only data tests ever
+read. `data/curated/` is a generated artifact (gitignored) rebuilt by
+`powerhouse ingest-fixtures`.
+
+## Repository Structure
+
+```
+financial-powerhouse/
+├── config/              # Typed YAML configuration (app/scanner/strategy/risk/reporting/backtest)
+├── data/                # Local data layer (see above)
+├── docs/                # Architecture, risk policy, and backtesting docs
+├── logs/                # Session and execution logs
+├── reports/             # Daily, session, trade, and backtest reports
+├── src/powerhouse/
+│   ├── agents/           # Scanner, Catalyst, Strategy, Risk, Execution, Reporting
+│   ├── backtest/         # Historical replay engine (+ overlapping-positions mode) + metrics
+│   ├── brokers/           # Broker ABC + in-memory PaperBroker (no live broker)
+│   ├── config/           # Pydantic schemas + YAML loader
+│   ├── conductor/         # Orchestration service
+│   ├── core/              # Models, enums, phase router, exceptions
+│   ├── data/               # Parquet ingestion + DuckDB query helpers
+│   ├── memory/             # Simple JSON memory record store
+│   └── simulation/         # Trade execution simulator (no broker/network calls)
+├── tests/                # Unit and integration tests (network-free)
+├── pyproject.toml
+└── README.md
+```
+
+## Key Concepts
+
+### Conductor
+
+Orchestrates a single pipeline pass: resolves the market phase, calls each
+specialist in sequence, enforces the risk/approval gate, and produces a report.
+`BacktestEngine` re-runs this same pipeline once per historical trading day.
+
+### Specialists
+
+- **Scanner** (`agents/scanner.py`): Ranks a configured universe by a
+  deterministic momentum score computed from local Parquet OHLCV data. No ML.
+- **Catalyst** (`agents/catalyst.py`): Attaches structured, fixture-based
+  annotations (`data/raw/catalysts.csv`) - no news APIs, no LLM calls.
+- **Strategy** (`agents/strategy.py`): Builds explicit `TradePlan`s (entry,
+  stop, target, optional trailing-stop %, confidence, rationale) from a
+  simple average-true-range-style volatility estimate and a risk-based
+  position size.
+- **Risk** (`agents/risk.py`): Deterministically vetoes or approves plans -
+  see [`docs/risk-policy.md`](docs/risk-policy.md).
+- **Execution** (`agents/execution.py`, `simulation/executor.py`): Simulates
+  fills, stop/target/trailing-stop exits, and no-fill outcomes, and routes
+  every approved plan through a `Broker` (`brokers/`, `PaperBroker` by
+  default). No broker in this repo calls a real brokerage or the network.
+- **Reporting** (`agents/reporting.py`): Builds markdown reports and writes
+  JSONL/Parquet artifacts (ranked candidates, trade plans, risk decisions,
+  simulated outcomes, summary metrics).
+
+### Approval Gate
+
+By default, all execution is blocked. Execution requires an explicit
+`ExecutionPolicy.allow_execution=True` *and* the risk layer's approval. This
+is enforced deterministically, not by LLM judgment. `mode=live` is refused
+by `ExecutionAgent` outright, independent of `allow_execution`.
+
+### Broker Abstraction
+
+`src/powerhouse/brokers/` defines the only surface through which order
+routing may happen: a `Broker` ABC (`submit_order`, `cancel_order`,
+`get_positions`, `get_cash`, `get_orders`, `is_paper`) and one concrete,
+in-memory `PaperBroker` implementation that never makes network calls.
+`ExecutionAgent` defaults to a fresh `PaperBroker` and forwards every
+approved plan to it. A real brokerage (e.g. Robinhood) would be added in a
+future phase as another `Broker` subclass, still gated behind the same
+`ExecutionPolicy.allow_execution` check - no such adapter exists today.
+
+### Storage
+
+Structured events are written to JSONL and Parquet under `data/backtests/`,
+and simple JSON memory records are written under `data/memory/`. See
+[`docs/artifacts.md`](docs/artifacts.md) for the full field-by-field
+contract an external dashboard can rely on.
+
+## Safety and Risk Policy
+
+See [`docs/risk-policy.md`](docs/risk-policy.md) for hard constraints:
+
+- Execution is disabled by default.
+- Daily loss cap is tracked and enforced (`Portfolio.realized_pnl_today`).
+- Per-trade risk, total open risk, and projected post-trade exposure caps
+  are all enforced with specific veto reasons.
+- No market orders; no shorting.
+- **Live trading is not implemented in this codebase.** `powerhouse.brokers.PaperBroker`
+  is the only broker adapter, is in-memory, and never makes network calls;
+  `ExecutionAgent` refuses to execute anything when `mode=live`, and no
+  command in this repo ever sets `mode=live`.
+
+## Current Limitations (labeled placeholders)
+
+- The Phase 2 "resolve on open" backtest engine (still the default) resolves
+  each trade to completion (fill through exit) at the moment it is opened.
+  The opt-in `--overlapping-positions` mode (Phase 3) replaces this with true
+  multi-day, multi-position tracking - see
+  [`docs/backtesting.md`](docs/backtesting.md) for both models' assumptions.
+- `run-session`/`run-paper-session`'s `ExecutionAgent` has no forward market
+  data to replay against a single point in time, so approved plans are
+  simulated as pending/no-fill rather than actually filled (even though
+  `run-paper-session` now routes them through a real `PaperBroker`) - only
+  the backtest engine drives a plan through fill -> stop/target/trailing -> close.
+- The catalyst agent reads a static fixture CSV; there is no live news feed.
+- **No live broker adapter exists.** `powerhouse.brokers.PaperBroker` is the
+  only `Broker` implementation; a real brokerage (Robinhood or otherwise)
+  would be added in a future phase as another `Broker` subclass, still
+  gated behind `ExecutionPolicy.allow_execution` and never wired to
+  `mode=live` by any command in this repo.
+
+## Phase 4 Preview
+
+Phase 4 should add:
+
+- A real (non-paper) broker adapter behind the `Broker` interface, still
+  gated behind `ExecutionPolicy` and requiring explicit, auditable opt-in.
