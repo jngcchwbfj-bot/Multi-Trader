@@ -2,6 +2,7 @@
 
 from decimal import Decimal
 
+from powerhouse.core.enums import OrderSide
 from powerhouse.core.models import RiskDecision, SessionContext, TradePlan
 
 from .base import BaseAgent
@@ -46,10 +47,23 @@ class RiskAgent(BaseAgent[list[RiskDecision]]):
             # Check daily loss cap
             daily_loss_passed = True  # TODO: track daily losses
 
-            # Check exposure
-            long_exposure = portfolio.get_long_exposure_pct()
+            # Check exposure: project what long exposure would be AFTER this
+            # trade fills, not just the portfolio's current exposure. Only
+            # BUY orders add long exposure (Phase 1 permits no shorting).
+            current_exposure_value = portfolio.account_value - portfolio.cash
+            notional_value = (
+                plan.entry_price * plan.quantity
+                if plan.side == OrderSide.BUY
+                else Decimal("0")
+            )
+            projected_exposure_value = current_exposure_value + notional_value
+            projected_exposure_pct = (
+                float(projected_exposure_value / portfolio.account_value * 100)
+                if portfolio.account_value > 0
+                else 0.0
+            )
             max_new_exposure = policy.max_long_exposure_pct
-            exposure_passed = long_exposure < max_new_exposure
+            exposure_passed = projected_exposure_pct <= max_new_exposure
 
             # Check per-trade risk
             risk_amount = plan.get_risk_amount(portfolio.account_value)
@@ -64,7 +78,19 @@ class RiskAgent(BaseAgent[list[RiskDecision]]):
                 and per_trade_passed
             )
 
-            reason = "Execution disabled" if not policy.allow_execution else "Plan approved"
+            if not policy.allow_execution:
+                reason = "Execution disabled"
+            elif not daily_loss_passed:
+                reason = "Daily loss cap exceeded"
+            elif not exposure_passed:
+                reason = (
+                    f"Long exposure cap exceeded: projected "
+                    f"{projected_exposure_pct:.1f}% > cap {max_new_exposure:.1f}%"
+                )
+            elif not per_trade_passed:
+                reason = "Per-trade risk limit exceeded"
+            else:
+                reason = "Plan approved"
 
             adjusted_quantity = plan.quantity if approved else 0
 
