@@ -3,6 +3,7 @@
 import asyncio
 import json
 from datetime import datetime, timezone
+from decimal import Decimal
 from pathlib import Path
 
 import typer
@@ -11,9 +12,12 @@ from rich.markdown import Markdown
 from rich.panel import Panel
 
 from powerhouse.__init__ import __version__
+from powerhouse.agents.execution import ExecutionAgent
 from powerhouse.agents.reporting import build_backtest_markdown, write_backtest_artifacts
 from powerhouse.backtest import BacktestEngine
+from powerhouse.brokers import PaperBroker
 from powerhouse.conductor.service import ConductorService
+from powerhouse.config import BacktestConfig
 from powerhouse.core.enums import OperatingMode, Phase
 from powerhouse.core.models import ExecutionPolicy, Portfolio, SessionContext
 from powerhouse.core.phase_router import PhaseRouter
@@ -215,6 +219,15 @@ def run_backtest(
     start_date: str = typer.Option(None, help="Start date YYYY-MM-DD (default: earliest)"),
     end_date: str = typer.Option(None, help="End date YYYY-MM-DD (default: latest)"),
     phase: str = typer.Option("open", help="Market phase profile to simulate under"),
+    overlapping_positions: bool = typer.Option(
+        False,
+        "--overlapping-positions/--no-overlapping-positions",
+        help=(
+            "Model multiple concurrent positions per symbol and across "
+            "symbols over multiple days, instead of resolving each trade to "
+            "completion the instant it's approved (Phase 2 default)."
+        ),
+    ),
 ) -> None:
     """Run a real historical replay/simulation backtest over local Parquet data."""
     console.print(Panel("[cyan]Running backtest[/cyan]"))
@@ -227,7 +240,9 @@ def run_backtest(
     symbol_list = [s.strip().upper() for s in symbols.split(",") if s.strip()] or None
 
     try:
-        engine = BacktestEngine()
+        engine = BacktestEngine(
+            backtest_config=BacktestConfig(overlapping_positions=overlapping_positions)
+        )
         result = engine.run(
             symbols=symbol_list, start_date=start_date, end_date=end_date, phase=market_phase
         )
@@ -253,6 +268,94 @@ def run_backtest(
         },
     )
     console.print(f"[cyan]Memory record saved to:[/cyan] {memory_path}")
+
+
+@app.command(name="run-paper-session")
+def run_paper_session(
+    phase: str = typer.Option("open", help="Market phase to simulate"),
+    enable_execution: bool = typer.Option(
+        False,
+        "--enable-execution/--no-enable-execution",
+        help="Allow the paper broker to receive orders. Still never live.",
+    ),
+    starting_cash: float = typer.Option(100_000, help="Starting paper account cash"),
+) -> None:
+    """Run a single point-in-time session routed through the in-memory PaperBroker.
+
+    This is still not live trading: `PaperBroker` never makes network calls,
+    and execution stays blocked unless `--enable-execution` is passed. As
+    with `run-session`, there is no forward market data at a single point in
+    time, so any approved plan is recorded as pending/no-fill at the broker
+    - see docs/backtesting.md for why a full replay needs `run-backtest`.
+    """
+    console.print(Panel(f"[cyan]Running {phase} paper session[/cyan]"))
+    try:
+        market_phase = Phase(phase)
+    except ValueError:
+        console.print(f"[red]Invalid phase: {phase}[/red]")
+        raise typer.Exit(1)
+
+    try:
+        cash = Decimal(str(starting_cash))
+        broker = PaperBroker(starting_cash=cash)
+        conductor = ConductorService(execution=ExecutionAgent(broker=broker))
+        ctx = SessionContext(
+            timestamp=datetime.now(timezone.utc),
+            phase=market_phase,
+            mode=OperatingMode.PAPER,
+            execution_policy=ExecutionPolicy(
+                allow_execution=enable_execution, mode=OperatingMode.PAPER
+            ),
+            portfolio=Portfolio(account_value=cash, cash=cash, buying_power=cash),
+        )
+        result = asyncio.run(conductor.run_session(ctx))
+    except Exception as e:
+        console.print(f"[red]✗ Paper session failed: {e}[/red]")
+        raise typer.Exit(1)
+
+    if result.report and result.report.markdown_report:
+        console.print(Markdown(result.report.markdown_report))
+
+    orders = asyncio.run(broker.get_orders())
+    positions = asyncio.run(broker.get_positions())
+    broker_cash = asyncio.run(broker.get_cash())
+    console.print(
+        Panel(
+            f"[cyan]Paper broker[/cyan]: {len(orders)} order(s), "
+            f"{len(positions)} open position(s), cash ${broker_cash:,.2f}"
+        )
+    )
+
+    reports_dir = Path("reports") / "sessions"
+    reports_dir.mkdir(parents=True, exist_ok=True)
+    report_file = reports_dir / f"{ctx.session_id}.md"
+    report_file.write_text(result.report.markdown_report)
+    console.print(f"\n[cyan]Report saved to:[/cyan] {report_file}")
+
+    memory = MemoryStore()
+    memory_path = memory.write_session_record(
+        ctx.session_id,
+        {
+            "session_id": ctx.session_id,
+            "phase": ctx.phase.value,
+            "mode": ctx.mode.value,
+            "status": result.status.value,
+            "broker": broker.name,
+            "broker_is_paper": broker.is_paper,
+            "broker_orders": len(orders),
+            "broker_cash": str(broker_cash),
+            "execution_enabled": enable_execution,
+        },
+    )
+    console.print(f"[cyan]Memory record saved to:[/cyan] {memory_path}")
+
+    if result.status.value != "success":
+        console.print(f"\n[red]Paper session failed: {result.status.value}[/red]")
+        if result.errors:
+            for error in result.errors:
+                console.print(f"  [red]Error:[/red] {error}")
+        raise typer.Exit(1)
+    console.print(f"\n[green]Paper session completed: {result.status.value}[/green]")
 
 
 @app.command(name="build-report")

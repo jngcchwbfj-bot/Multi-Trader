@@ -48,6 +48,7 @@ from powerhouse.data import available_symbols, load_ohlcv
 from powerhouse.simulation.executor import Bar, TradeSimulator
 
 from .metrics import compute_metrics
+from .positions import PositionBook
 
 DEFAULT_CURATED_DIR = Path("data/curated")
 DEFAULT_CATALYST_FIXTURE = Path("data/raw/catalysts.csv")
@@ -95,6 +96,11 @@ class BacktestEngine:
         end_date: str | None = None,
         phase: Phase = Phase.OPEN,
     ) -> BacktestResult:
+        if self.backtest_config.overlapping_positions:
+            return await self._run_overlapping_async(symbols, start_date, end_date, phase)
+        return await self._run_resolve_on_open_async(symbols, start_date, end_date, phase)
+
+    def _load_data(self, symbols: list[str] | None) -> dict[str, pd.DataFrame]:
         symbols = symbols or self.scanner_config.universe or available_symbols(self.curated_dir)
         data = {}
         for s in symbols:
@@ -109,18 +115,20 @@ class BacktestEngine:
                 f"No curated data found for symbols {symbols} in {self.curated_dir}. "
                 "Run `powerhouse ingest-fixtures` first."
             )
+        return data
 
+    def _compute_date_range(
+        self, data: dict[str, pd.DataFrame], start_date: str | None, end_date: str | None
+    ) -> list[pd.Timestamp]:
         all_dates = sorted(set().union(*[set(df["date"]) for df in data.values()]))
         if start_date:
             all_dates = [d for d in all_dates if d >= pd.Timestamp(start_date)]
         if end_date:
             all_dates = [d for d in all_dates if d <= pd.Timestamp(end_date)]
+        return all_dates
 
-        starting_cash = Decimal(str(self.backtest_config.starting_cash))
-        portfolio = Portfolio(
-            account_value=starting_cash, cash=starting_cash, buying_power=starting_cash
-        )
-        policy = ExecutionPolicy(
+    def _build_policy(self) -> ExecutionPolicy:
+        return ExecutionPolicy(
             allow_execution=True,
             mode=OperatingMode.BACKTEST,
             max_daily_loss_pct=self.risk_config.max_daily_loss_pct,
@@ -131,6 +139,39 @@ class BacktestEngine:
             allow_market_orders=self.risk_config.allow_market_orders,
             require_approval_per_trade=self.risk_config.require_approval_per_trade,
         )
+
+    def _bars_on(self, data: dict[str, pd.DataFrame], as_of: pd.Timestamp) -> dict[str, Bar]:
+        """Return each symbol's bar exactly on `as_of` (if it has one)."""
+        bars: dict[str, Bar] = {}
+        for symbol, df in data.items():
+            row = df[df["date"] == as_of]
+            if row.empty:
+                continue
+            r = row.iloc[0]
+            bars[symbol] = Bar(
+                date=str(r.date.date()),
+                open=float(r.open),
+                high=float(r.high),
+                low=float(r.low),
+                close=float(r.close),
+            )
+        return bars
+
+    async def _run_resolve_on_open_async(
+        self,
+        symbols: list[str] | None,
+        start_date: str | None,
+        end_date: str | None,
+        phase: Phase,
+    ) -> BacktestResult:
+        data = self._load_data(symbols)
+        all_dates = self._compute_date_range(data, start_date, end_date)
+
+        starting_cash = Decimal(str(self.backtest_config.starting_cash))
+        portfolio = Portfolio(
+            account_value=starting_cash, cash=starting_cash, buying_power=starting_cash
+        )
+        policy = self._build_policy()
 
         profile = PhaseRouter.get_profile(phase)
         aggressiveness = self.scanner_config.phase_aggressiveness.get(
@@ -202,12 +243,123 @@ class BacktestEngine:
             equity_curve=equity_curve,
         )
 
+    async def _run_overlapping_async(
+        self,
+        symbols: list[str] | None,
+        start_date: str | None,
+        end_date: str | None,
+        phase: Phase,
+    ) -> BacktestResult:
+        """Event-driven replay allowing multiple concurrent positions per
+        symbol and across symbols over multiple days. See
+        `docs/backtesting.md` for the accounting model (cash reserved at
+        fill, mark-to-market equity, flatten-at-end-of-range).
+        """
+        data = self._load_data(symbols)
+        all_dates = self._compute_date_range(data, start_date, end_date)
+
+        starting_cash = Decimal(str(self.backtest_config.starting_cash))
+        portfolio = Portfolio(
+            account_value=starting_cash, cash=starting_cash, buying_power=starting_cash
+        )
+        policy = self._build_policy()
+
+        profile = PhaseRouter.get_profile(phase)
+        aggressiveness = self.scanner_config.phase_aggressiveness.get(
+            phase.value, profile.scan_aggressiveness
+        )
+        catalyst_fixtures = load_catalyst_fixtures(self.catalyst_fixture)
+
+        book = PositionBook(self.simulator, self.backtest_config.max_holding_days)
+        all_plans: list[TradePlan] = []
+        all_decisions = []
+        all_trades = []
+        equity_curve: list[dict] = []
+
+        for as_of in all_dates:
+            portfolio.realized_pnl_today = Decimal("0")
+            bars_today = self._bars_on(data, as_of)
+            closes_today = {symbol: bar.close for symbol, bar in bars_today.items()}
+
+            filled, closed = book.advance(as_of, bars_today)
+            for position in filled:
+                portfolio.cash -= position.trade.entry_price * position.trade.quantity
+            for position in closed:
+                self._settle_close(portfolio, position.plan, position.trade)
+                all_trades.append(position.trade)
+
+            portfolio.account_value = portfolio.cash + book.market_value(closes_today)
+
+            capacity = max(0, profile.max_position_count - book.open_count())
+            candidates = self._scan(data, as_of) if capacity > 0 else []
+            candidates = rank_candidates(candidates, self.scanner_config, aggressiveness)
+            plans = self._draft_plans(
+                candidates, catalyst_fixtures, data, as_of, profile, portfolio, limit=capacity
+            )
+
+            ctx = SessionContext(
+                phase=phase,
+                mode=OperatingMode.BACKTEST,
+                execution_policy=policy,
+                portfolio=portfolio,
+            )
+            day_decisions = []
+            for plan in plans:
+                decision = (await self.risk_agent.run(ctx, [plan]))[0]
+                day_decisions.append(decision)
+                if decision.approved:
+                    book.queue_entry(plan, as_of)
+
+            all_plans.extend(plans)
+            all_decisions.extend(day_decisions)
+            equity_curve.append(
+                {"date": str(as_of.date()), "equity": float(portfolio.account_value)}
+            )
+
+        last_bars = self._bars_on(data, all_dates[-1]) if all_dates else {}
+        for position in book.flatten_all(last_bars):
+            self._settle_close(portfolio, position.plan, position.trade)
+            all_trades.append(position.trade)
+        for position in book.open_positions:
+            # No bar at all for this symbol on the final requested date (not
+            # expected with the committed fixtures, which share one
+            # calendar) - keep the trade visible in artifacts as still-open
+            # rather than silently dropping it.
+            all_trades.append(position.trade)
+        for plan, trade in book.expire_pending():
+            all_trades.append(trade)
+            risk_amount = plan.get_risk_amount(portfolio.account_value)
+            portfolio.open_risk_amount = max(Decimal("0"), portfolio.open_risk_amount - risk_amount)
+
+        metrics = compute_metrics(all_trades, starting_cash, equity_curve)
+
+        return BacktestResult(
+            symbols=list(data.keys()),
+            start_date=str(all_dates[0].date()) if all_dates else "",
+            end_date=str(all_dates[-1].date()) if all_dates else "",
+            trade_plans=all_plans,
+            risk_decisions=all_decisions,
+            executed_trades=all_trades,
+            metrics=metrics,
+            equity_curve=equity_curve,
+        )
+
+    def _settle_close(self, portfolio: Portfolio, plan: TradePlan, trade) -> None:
+        """Release reserved cash, realize P&L, and free open-risk for a closed position."""
+        if trade.pnl is None:
+            return
+        portfolio.cash += trade.entry_price * trade.quantity + trade.pnl
+        portfolio.realized_pnl_today += trade.pnl
+        risk_amount = plan.get_risk_amount(portfolio.account_value)
+        portfolio.open_risk_amount = max(Decimal("0"), portfolio.open_risk_amount - risk_amount)
+
     def _scan(
         self,
         data: dict[str, pd.DataFrame],
         as_of: pd.Timestamp,
-        blocked_until: dict[str, pd.Timestamp],
+        blocked_until: dict[str, pd.Timestamp] | None = None,
     ) -> list[Candidate]:
+        blocked_until = blocked_until or {}
         candidates = []
         for symbol, df in data.items():
             if symbol in blocked_until and blocked_until[symbol] >= as_of:
@@ -237,13 +389,15 @@ class BacktestEngine:
         as_of: pd.Timestamp,
         profile,
         portfolio: Portfolio,
+        limit: int | None = None,
     ) -> list[TradePlan]:
-        if profile.max_position_count == 0:
+        cap = profile.max_position_count if limit is None else limit
+        if cap <= 0:
             return []
 
         plans: list[TradePlan] = []
         for candidate in candidates:
-            if len(plans) >= profile.max_position_count:
+            if len(plans) >= cap:
                 break
             catalyst = catalyst_fixtures.get(candidate.ticker.upper())
             catalyst_confidence = catalyst.confidence if catalyst else 0.4

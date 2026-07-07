@@ -13,12 +13,12 @@ from powerhouse.core.models import SessionContext, SessionResult
 class ConductorService:
     """Orchestrates trading workflow for a session."""
 
-    def __init__(self):
+    def __init__(self, execution: ExecutionAgent | None = None):
         self.scanner = ScannerAgent()
         self.catalyst = CatalystAgent()
         self.strategy = StrategyAgent()
         self.risk = RiskAgent()
-        self.execution = ExecutionAgent()
+        self.execution = execution or ExecutionAgent()
         self.reporting = ReportingAgent()
 
     async def run_session(self, context: SessionContext) -> SessionResult:

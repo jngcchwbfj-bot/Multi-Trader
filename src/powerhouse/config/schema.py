@@ -78,6 +78,19 @@ class ReportingConfig(BaseModel):
     write_parquet: bool = True
 
 
+class BrokerConfig(BaseModel):
+    """Broker adapter settings (config/broker.yaml).
+
+    `mode` is a label, not a switch: this repo only ships a `paper` broker
+    (`powerhouse.brokers.PaperBroker`, in-memory, no network calls). `live`
+    is reserved for a future phase and is never wired to any execution path
+    today - see docs/risk-policy.md.
+    """
+
+    mode: str = "paper"  # "paper" (only implementation) or "live" (not implemented)
+    starting_cash: float = 100_000
+
+
 class BacktestConfig(BaseModel):
     """Backtest engine assumptions (config/backtest.yaml)."""
 
@@ -87,6 +100,7 @@ class BacktestConfig(BaseModel):
     fill_on: str = "next_open"  # "next_open" or "same_close"
     max_holding_days: int = 5
     starting_cash: float = 100_000
+    overlapping_positions: bool = False  # opt-in: see docs/backtesting.md
 
 
 class RootConfig(BaseModel):
@@ -98,3 +112,4 @@ class RootConfig(BaseModel):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     reporting: ReportingConfig = Field(default_factory=ReportingConfig)
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
+    broker: BrokerConfig = Field(default_factory=BrokerConfig)

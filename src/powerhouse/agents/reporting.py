@@ -119,8 +119,10 @@ class ReportingAgent(BaseAgent[SessionReport]):
             md_lines.extend(["## Ranked Candidates", ""])
             for i, cand in enumerate(candidates, start=1):
                 catalyst = catalyst_by_ticker.get(cand.ticker)
-                md_lines.append(f"{i}. **{cand.ticker}** - ${cand.price} "
-                                 f"(score {cand.relevance_score:.2f}) - {cand.reason}")
+                md_lines.append(
+                    f"{i}. **{cand.ticker}** - ${cand.price} "
+                    f"(score {cand.relevance_score:.2f}) - {cand.reason}"
+                )
                 if catalyst:
                     md_lines.append(
                         f"   - Catalyst [{catalyst.sentiment}]: {catalyst.summary} "
@@ -193,12 +195,22 @@ class ReportingAgent(BaseAgent[SessionReport]):
     ) -> None:
         artifacts_dir = Path(self.config.artifacts_dir) / "sessions"
         artifacts_dir.mkdir(parents=True, exist_ok=True)
-        records = {
-            "candidates": [c.model_dump() for c in candidates],
-            "catalysts": [c.model_dump() for c in catalysts],
-            "trade_plans": [p.model_dump() for p in plans],
-            "risk_decisions": [d.model_dump() for d in decisions],
-            "executed_trades": [t.model_dump() for t in trades],
+
+        # `kind` is singular per record (matches the backtest artifact
+        # convention below) so a dashboard can rely on one naming scheme
+        # across both artifact families. See docs/artifacts.md.
+        records: dict[str, list[dict]] = {
+            "candidate": [c.model_dump() for c in candidates],
+            "catalyst": [c.model_dump() for c in catalysts],
+            "trade_plan": [p.model_dump() for p in plans],
+            "risk_decision": [d.model_dump() for d in decisions],
+            "executed_trade": [t.model_dump() for t in trades],
+        }
+        common = {
+            "session_id": context.session_id,
+            "phase": context.phase.value,
+            "mode": context.mode.value,
+            "timestamp": context.timestamp,
         }
 
         if self.config.write_jsonl:
@@ -206,12 +218,17 @@ class ReportingAgent(BaseAgent[SessionReport]):
             with jsonl_path.open("w") as f:
                 for kind, rows in records.items():
                     for row in rows:
-                        f.write(json.dumps({"kind": kind, **row}, default=_json_default) + "\n")
+                        f.write(
+                            json.dumps({"kind": kind, **common, **row}, default=_json_default)
+                            + "\n"
+                        )
 
         if self.config.write_parquet and plans:
-            table = pa.Table.from_pylist(
-                [json.loads(json.dumps(p.model_dump(), default=_json_default)) for p in plans]
-            )
+            rows = [
+                json.loads(json.dumps({**common, **p.model_dump()}, default=_json_default))
+                for p in plans
+            ]
+            table = pa.Table.from_pylist(rows)
             pq.write_table(table, artifacts_dir / f"{context.session_id}_plans.parquet")
 
 
@@ -247,36 +264,60 @@ def build_backtest_markdown(result: BacktestResult) -> str:
     return "\n".join(lines)
 
 
-def _write_jsonl_record(f, kind: str, record: dict) -> None:
-    f.write(json.dumps({"kind": kind, **record}, default=_json_default) + "\n")
+def _write_jsonl_record(f, kind: str, backtest_id: str, record: dict) -> None:
+    f.write(
+        json.dumps({"kind": kind, "backtest_id": backtest_id, **record}, default=_json_default)
+        + "\n"
+    )
 
 
-def write_backtest_artifacts(
-    result: BacktestResult, config: ReportingConfig | None = None
-) -> Path:
-    """Write JSONL + Parquet artifacts for a completed backtest run."""
+def write_backtest_artifacts(result: BacktestResult, config: ReportingConfig | None = None) -> Path:
+    """Write JSONL + Parquet artifacts for a completed backtest run.
+
+    Every JSONL row carries `backtest_id` and `kind` so rows from multiple
+    runs can be safely concatenated/joined by an external dashboard. Only
+    the singleton `metrics` row also carries run-level metadata (symbols,
+    date range) to avoid repeating it on every trade/plan/decision row. See
+    docs/artifacts.md for the full field reference.
+    """
     config = config or ReportingConfig()
     out_dir = Path(config.artifacts_dir) / "runs"
     out_dir.mkdir(parents=True, exist_ok=True)
+    bid = result.backtest_id
 
-    jsonl_path = out_dir / f"{result.backtest_id}.jsonl"
+    jsonl_path = out_dir / f"{bid}.jsonl"
     with jsonl_path.open("w") as f:
-        _write_jsonl_record(f, "metrics", result.metrics.model_dump())
+        _write_jsonl_record(
+            f,
+            "metrics",
+            bid,
+            {
+                "symbols": result.symbols,
+                "start_date": result.start_date,
+                "end_date": result.end_date,
+                "created_at": result.created_at,
+                **result.metrics.model_dump(),
+            },
+        )
         for plan in result.trade_plans:
-            _write_jsonl_record(f, "trade_plan", plan.model_dump())
+            _write_jsonl_record(f, "trade_plan", bid, plan.model_dump())
         for decision in result.risk_decisions:
-            _write_jsonl_record(f, "risk_decision", decision.model_dump())
+            _write_jsonl_record(f, "risk_decision", bid, decision.model_dump())
         for trade in result.executed_trades:
-            _write_jsonl_record(f, "executed_trade", trade.model_dump())
+            _write_jsonl_record(f, "executed_trade", bid, trade.model_dump())
         for point in result.equity_curve:
-            _write_jsonl_record(f, "equity_point", point)
+            _write_jsonl_record(f, "equity_point", bid, point)
 
     if result.executed_trades:
         rows = [
-            json.loads(json.dumps(t.model_dump(), default=_json_default))
+            json.loads(json.dumps({"backtest_id": bid, **t.model_dump()}, default=_json_default))
             for t in result.executed_trades
         ]
         table = pa.Table.from_pylist(rows)
-        pq.write_table(table, out_dir / f"{result.backtest_id}_trades.parquet")
+        pq.write_table(table, out_dir / f"{bid}_trades.parquet")
+
+    if result.equity_curve:
+        equity_rows = [{"backtest_id": bid, **point} for point in result.equity_curve]
+        pq.write_table(pa.Table.from_pylist(equity_rows), out_dir / f"{bid}_equity.parquet")
 
     return jsonl_path

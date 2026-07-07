@@ -28,6 +28,22 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _parse_bar_date(bar_date: str) -> datetime:
+    """Parse a bar's date string into a UTC midnight datetime.
+
+    Used to stamp trade fill/exit timestamps with the *simulated* calendar
+    date rather than wall-clock time, so backtest artifacts (e.g. a trade
+    timeline on an external dashboard) reflect when a trade actually
+    happened in the replay, not when the backtest process was run. Falls
+    back to wall-clock time for non-ISO placeholder dates (e.g. in tests
+    that use bars like `Bar(date="d0", ...)`).
+    """
+    try:
+        return datetime.strptime(bar_date, "%Y-%m-%d").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return _now()
+
+
 class TradeSimulator:
     """Simulates the lifecycle of a single trade plan against a bar series.
 
@@ -79,6 +95,88 @@ class TradeSimulator:
         )
         return trade
 
+    def mark_no_fill(self, trade: ExecutedTrade) -> None:
+        """Record `trade` as unfillable (no forward market data available)."""
+        trade.outcome = "no_fill"
+        trade.events.append(
+            TradeEvent(
+                trade_id=trade.trade_id,
+                plan_id=trade.plan_id,
+                ticker=trade.ticker,
+                event_type=TradeEventType.NO_FILL,
+                details={"reason": "No forward market data available to simulate a fill"},
+            )
+        )
+
+    def fill(self, trade: ExecutedTrade, plan: TradePlan, bar: Bar) -> None:
+        """Fill `trade` at `bar`'s open (adjusted for slippage), in place."""
+        fill_price = self._slip(bar.open, plan.side)
+        trade.entry_price = fill_price
+        trade.entry_timestamp = _parse_bar_date(bar.date)
+        trade.outcome = "filled"
+        trade.events.append(
+            TradeEvent(
+                trade_id=trade.trade_id,
+                plan_id=plan.plan_id,
+                ticker=plan.ticker,
+                event_type=TradeEventType.FILLED,
+                price=fill_price,
+                quantity=plan.quantity,
+                details={"bar_date": bar.date},
+            )
+        )
+
+    def step(
+        self,
+        trade: ExecutedTrade,
+        plan: TradePlan,
+        bar: Bar,
+        trailing_stop_price: Optional[Decimal],
+    ) -> Optional[Decimal]:
+        """Advance an already-filled, still-open `trade` by one forward bar.
+
+        Checks stop-loss before target (matching a bar's plausible intrabar
+        path), then ratchets the trailing stop (if configured) upward. Sets
+        `trade.closed=True` as a side effect if this bar closes the trade.
+        Returns the (possibly updated) trailing-stop price for the caller to
+        carry into the next call.
+        """
+        effective_stop = (
+            trailing_stop_price if trailing_stop_price is not None else plan.stop_loss_price
+        )
+
+        if bar.low <= float(effective_stop):
+            exit_price = Decimal(str(min(bar.open, float(effective_stop))))
+            self._close(trade, exit_price, bar.date, TradeEventType.STOP_HIT)
+            return trailing_stop_price
+
+        if bar.high >= float(plan.target_price):
+            exit_price = Decimal(str(max(bar.open, float(plan.target_price))))
+            self._close(trade, exit_price, bar.date, TradeEventType.TARGET_HIT)
+            return trailing_stop_price
+
+        if plan.trailing_stop_pct:
+            candidate = Decimal(str(round(bar.close * (1 - plan.trailing_stop_pct / 100), 4)))
+            if trailing_stop_price is None or candidate > trailing_stop_price:
+                trailing_stop_price = candidate
+                trade.trailing_stop_price = trailing_stop_price
+                trade.events.append(
+                    TradeEvent(
+                        trade_id=trade.trade_id,
+                        plan_id=plan.plan_id,
+                        ticker=plan.ticker,
+                        event_type=TradeEventType.TRAILING_STOP_UPDATED,
+                        price=trailing_stop_price,
+                        details={"bar_date": bar.date},
+                    )
+                )
+
+        return trailing_stop_price
+
+    def close_manual(self, trade: ExecutedTrade, bar: Bar) -> None:
+        """Force-close `trade` at `bar`'s close (time-based / end-of-range exit)."""
+        self._close(trade, Decimal(str(bar.close)), bar.date, TradeEventType.MANUAL_CLOSE)
+
     def run(self, plan: TradePlan, bars: list[Bar]) -> ExecutedTrade:
         """Run the full simulated lifecycle of a plan against forward bars.
 
@@ -90,74 +188,22 @@ class TradeSimulator:
         trade = self.open_pending(plan)
 
         if not bars:
-            trade.outcome = "no_fill"
-            trade.events.append(
-                TradeEvent(
-                    trade_id=trade.trade_id,
-                    plan_id=plan.plan_id,
-                    ticker=plan.ticker,
-                    event_type=TradeEventType.NO_FILL,
-                    details={"reason": "No forward market data available to simulate a fill"},
-                )
-            )
+            self.mark_no_fill(trade)
             return trade
 
-        fill_bar = bars[0]
-        fill_price = self._slip(fill_bar.open, plan.side)
-        trade.entry_price = fill_price
-        trade.outcome = "filled"
-        trade.events.append(
-            TradeEvent(
-                trade_id=trade.trade_id,
-                plan_id=plan.plan_id,
-                ticker=plan.ticker,
-                event_type=TradeEventType.FILLED,
-                price=fill_price,
-                quantity=plan.quantity,
-                details={"bar_date": fill_bar.date},
-            )
-        )
+        self.fill(trade, plan, bars[0])
 
         trailing_stop_price: Optional[Decimal] = None
-        stop_price = plan.stop_loss_price
-
         for i, bar in enumerate(bars[1:], start=1):
             if i > self.max_holding_days:
                 break
-
-            effective_stop = trailing_stop_price if trailing_stop_price is not None else stop_price
-
-            if bar.low <= float(effective_stop):
-                exit_price = Decimal(str(min(bar.open, float(effective_stop))))
-                self._close(trade, exit_price, bar.date, TradeEventType.STOP_HIT)
+            trailing_stop_price = self.step(trade, plan, bar, trailing_stop_price)
+            if trade.closed:
                 return trade
-
-            if bar.high >= float(plan.target_price):
-                exit_price = Decimal(str(max(bar.open, float(plan.target_price))))
-                self._close(trade, exit_price, bar.date, TradeEventType.TARGET_HIT)
-                return trade
-
-            if plan.trailing_stop_pct:
-                candidate = Decimal(str(round(bar.close * (1 - plan.trailing_stop_pct / 100), 4)))
-                if trailing_stop_price is None or candidate > trailing_stop_price:
-                    trailing_stop_price = candidate
-                    trade.trailing_stop_price = trailing_stop_price
-                    trade.events.append(
-                        TradeEvent(
-                            trade_id=trade.trade_id,
-                            plan_id=plan.plan_id,
-                            ticker=plan.ticker,
-                            event_type=TradeEventType.TRAILING_STOP_UPDATED,
-                            price=trailing_stop_price,
-                            details={"bar_date": bar.date},
-                        )
-                    )
 
         # Time-based exit: still open after max_holding_days / available bars.
         last_bar = bars[min(len(bars) - 1, self.max_holding_days)]
-        self._close(
-            trade, Decimal(str(last_bar.close)), last_bar.date, TradeEventType.MANUAL_CLOSE
-        )
+        self.close_manual(trade, last_bar)
         return trade
 
     def _close(
@@ -170,7 +216,7 @@ class TradeSimulator:
         }
         trade.closed = True
         trade.exit_price = exit_price
-        trade.exit_timestamp = _now()
+        trade.exit_timestamp = _parse_bar_date(bar_date)
         trade.outcome = outcome_map[event_type]
         gross = (exit_price - trade.entry_price) * trade.quantity
         commission = Decimal(str(self.commission_per_share)) * trade.quantity * 2

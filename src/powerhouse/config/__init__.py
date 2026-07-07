@@ -4,6 +4,7 @@ from .loader import load_config, load_section
 from .schema import (
     AppConfig,
     BacktestConfig,
+    BrokerConfig,
     ReportingConfig,
     RiskConfig,
     RootConfig,
@@ -16,6 +17,7 @@ __all__ = [
     "load_section",
     "AppConfig",
     "BacktestConfig",
+    "BrokerConfig",
     "ReportingConfig",
     "RiskConfig",
     "RootConfig",

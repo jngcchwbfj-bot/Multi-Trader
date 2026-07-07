@@ -168,15 +168,30 @@ Every decision point is logged with:
 
 Logs are stored in `logs/execution/` in JSONL format for later audit and learning.
 
-## Phase 3 Outlook
+## Phase 3 Update
 
-Phase 3 should add:
+Phase 3 adds a broker abstraction (`src/powerhouse/brokers/`): a `Broker`
+ABC and one concrete, in-memory `PaperBroker`. `ExecutionAgent` now routes
+every approved plan through a broker (defaulting to a fresh `PaperBroker`)
+instead of only the trade simulator directly, and explicitly refuses to run
+anything when `mode=live` - independent of `allow_execution` - since no live
+broker adapter exists. This is defense in depth on top of the existing
+gates below; it does not change when execution is permitted, only adds a
+broker-layer audit trail (`get_orders`/`get_positions`/`get_cash`) and one
+more hard stop against a live-mode misconfiguration.
+
+## Phase 4 Outlook
+
+Phase 4 should add:
 
 - Tiered approval levels (risk-based auto-approval for tiny trades).
 - Multi-day/multi-session risk rollup and correlation analysis across
   strategies (today's tracking is single-session/single-backtest-run scoped).
 - Regulatory report generation.
-- A real broker adapter, still gated behind the same `allow_execution` check.
+- A real (non-paper) broker adapter behind the Phase 3 `Broker` interface,
+  still gated behind the same `allow_execution` check and requiring an
+  explicit, auditable decision to enable `mode=live`.
 
 Until then, everything is **simulated**, **logged**, and **blocked by
-default unless `allow_execution=True` and the risk layer approves**.
+default unless `allow_execution=True` and the risk layer approves** - and
+`mode=live` is refused outright regardless of `allow_execution`.

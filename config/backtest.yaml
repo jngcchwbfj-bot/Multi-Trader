@@ -6,3 +6,8 @@ commission_per_share: 0.0
 fill_on: "next_open"  # "next_open" or "same_close"
 max_holding_days: 5
 starting_cash: 100000
+
+# Opt-in Phase 3 realism upgrade: model multiple overlapping positions per
+# symbol and across symbols over multiple days, instead of resolving each
+# trade to completion the instant it's approved. See docs/backtesting.md.
+overlapping_positions: false

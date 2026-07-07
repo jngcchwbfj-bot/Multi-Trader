@@ -11,6 +11,7 @@ from powerhouse.core.exceptions import ConfigError
 from .schema import (
     AppConfig,
     BacktestConfig,
+    BrokerConfig,
     ReportingConfig,
     RiskConfig,
     RootConfig,
@@ -29,6 +30,7 @@ _FILES: dict[str, type[BaseModel]] = {
     "risk": RiskConfig,
     "reporting": ReportingConfig,
     "backtest": BacktestConfig,
+    "broker": BrokerConfig,
 }
 
 

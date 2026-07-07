@@ -1,11 +1,15 @@
 # Architecture Overview
 
-> **Phase 2 status**: the backtest engine (`src/powerhouse/backtest/`), local
-> data layer (`src/powerhouse/data/`), typed config (`src/powerhouse/config/`),
-> execution simulator (`src/powerhouse/simulation/`), and memory store
-> (`src/powerhouse/memory/`) described below now exist and are wired in.
-> Live broker execution is still not implemented - see
-> [`docs/backtesting.md`](backtesting.md) and [`docs/risk-policy.md`](risk-policy.md).
+> **Phase 3 status**: the backtest engine (`src/powerhouse/backtest/`,
+> including the Phase 3 opt-in overlapping-positions mode), local data layer
+> (`src/powerhouse/data/`), typed config (`src/powerhouse/config/`), execution
+> simulator (`src/powerhouse/simulation/`), broker abstraction
+> (`src/powerhouse/brokers/`), and memory store (`src/powerhouse/memory/`)
+> described below now exist and are wired in. `src/powerhouse/brokers/`
+> ships exactly one concrete implementation, `PaperBroker` - in-memory, no
+> network calls. Live broker execution is still not implemented - see
+> [`docs/backtesting.md`](backtesting.md), [`docs/risk-policy.md`](risk-policy.md),
+> and [`docs/artifacts.md`](artifacts.md).
 
 ## System Design Principles
 
@@ -88,13 +92,18 @@ Each agent has a narrow responsibility:
 
 ### 5. Broker Abstraction
 
-**Module**: `brokers/` directory
+**Module**: `brokers/` directory (implemented in Phase 3)
 
 Responsibilities:
-- Define broker interface (Broker ABC).
-- Implement Paper broker for simulation.
-- Implement Robinhood MCP client (Phase 2+).
-- Translate internal OrderRequest to broker-specific API calls.
+- Define the broker interface (`Broker` ABC: `submit_order`, `cancel_order`,
+  `get_positions`, `get_cash`, `get_orders`, `is_paper`).
+- Implement `PaperBroker` - in-memory, reuses `TradeSimulator`, no network
+  calls. This is the only concrete `Broker` in the repo today.
+- A real brokerage client (e.g. Robinhood) is a **future phase**, not yet
+  implemented. It would be added as another `Broker` subclass, still gated
+  behind `ExecutionPolicy.allow_execution`.
+- Translate internal `TradePlan` to broker-specific order calls (`Order`
+  is the shared result type both `PaperBroker` and any future broker return).
 
 ### 6. Storage Layer
 

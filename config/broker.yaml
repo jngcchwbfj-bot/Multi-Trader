@@ -1,0 +1,8 @@
+# Broker adapter settings.
+#
+# `mode: paper` is the only implemented broker (powerhouse.brokers.PaperBroker,
+# in-memory, no network calls). `live` is a documented future mode - no code
+# path in this repo wires it to a real brokerage.
+
+mode: "paper"
+starting_cash: 100000
