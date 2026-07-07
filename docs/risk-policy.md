@@ -10,6 +10,17 @@ This document defines hard constraints enforced by the Financial Powerhouse syst
 > open-risk cap and structural plan-validity checks were also added. See
 > `src/powerhouse/agents/risk.py` for the implementation and
 > `tests/unit/test_daily_loss.py` for enforcement tests.
+>
+> **Phase 2.1 fix**: the Phase 2 `RiskAgent` daily-loss check was correct in
+> isolation but inert inside `BacktestEngine` - each simulated day risk-checked
+> *all* of that day's plans as one batch before simulating *any* of them, so
+> every decision saw `realized_pnl_today == 0` and the cap could never fire.
+> `BacktestEngine.run_async` now risk-checks and simulates plans one at a time
+> within a day, so a plan's decision reflects the realized P&L of trades
+> already closed earlier that same day. See
+> `tests/unit/test_backtest_engine.py::TestDailyLossEnforcementInEngine` for a
+> regression test that exercises this through the real engine, not just
+> `RiskAgent.run` in isolation.
 
 ## Core Principles
 
@@ -42,6 +53,13 @@ This document defines hard constraints enforced by the Financial Powerhouse syst
 - **Reporting**: All loss events are logged and reported.
 - **Reset**: `BacktestEngine` resets `realized_pnl_today` to zero at the
   start of each simulated trading day.
+- **Enforcement granularity (backtests)**: within a simulated day,
+  `BacktestEngine` risk-checks and simulates each plan one at a time (not as
+  one batch decision followed by one batch of fills). This means a later
+  plan on the same day can be blocked by losses realized from an earlier
+  plan *that same day* - the cap is not just a same-day-carry-forward from a
+  prior day, it can engage intraday within the replay's single-day event
+  loop.
 
 ### 3. Per-Trade Risk Limit
 

@@ -8,8 +8,11 @@ historical replay engine. For each trading day in the requested range, it:
 1. Slices each symbol's curated OHLCV data to "as of" that day (no look-ahead).
 2. Runs the same scanner -> catalyst -> strategy -> risk pipeline logic used
    by `run-session`, tuned by the given `Phase`'s `PhaseProfile`.
-3. Simulates every risk-approved plan forward via `TradeSimulator`
-   (`src/powerhouse/simulation/executor.py`) against subsequent bars.
+3. Risk-checks and simulates plans one at a time via `TradeSimulator`
+   (`src/powerhouse/simulation/executor.py`) against subsequent bars - not as
+   one batch risk decision followed by one batch of fills - so a plan's risk
+   check reflects realized P&L from trades already closed earlier the same
+   day (see "Daily-loss enforcement" below).
 4. Tracks portfolio cash, realized P&L, open risk, and an equity curve.
 5. Computes summary metrics (`backtest/metrics.py`) and writes JSONL/Parquet
    artifacts plus a JSON memory record.
@@ -31,6 +34,26 @@ OHLCV bars, produces real fills with slippage, and computes real P&L.
 - **No-fill**: if there is no forward bar at all (the plan was drafted on
   the last available day), the trade stays `no_fill` and contributes no P&L.
 - **Commission**: a flat `commission_per_share`, charged on both entry and exit.
+
+## Daily-Loss Enforcement
+
+`RiskAgent` vetoes plans once `Portfolio.get_daily_loss_pct()` reaches
+`max_daily_loss_pct` (see `docs/risk-policy.md`). Inside `BacktestEngine`,
+each day's candidate plans are risk-checked and simulated **one at a time**,
+in ranked order, rather than all being decided as a single batch before any
+are simulated. This means:
+
+- A plan drafted later in the same day can be rejected because of losses
+  realized by an earlier plan drafted *that same day*, not just losses
+  carried in from a previous day.
+- `realized_pnl_today` still resets to zero at the start of each new
+  simulated day - the cap is a genuine daily cap, not a running total across
+  the whole backtest.
+
+See `tests/unit/test_backtest_engine.py::TestDailyLossEnforcementInEngine`
+for a regression test that runs the real engine with a near-zero
+`max_daily_loss_pct` and asserts at least one plan is rejected with a
+`"Daily loss cap exceeded"` reason.
 
 ## Known Simplifications (labeled, not hidden)
 

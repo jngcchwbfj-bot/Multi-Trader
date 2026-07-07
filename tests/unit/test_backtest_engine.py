@@ -60,6 +60,57 @@ class TestBacktestEngine:
 
 
 @pytest.mark.unit
+class TestDailyLossEnforcementInEngine:
+    """Regression coverage for Phase 2.1: the daily-loss cap must actually be
+    able to block plans inside a real `BacktestEngine` run, not just in an
+    isolated `RiskAgent.run` call with a hand-built `Portfolio`.
+    """
+
+    @pytest.fixture
+    def curated_dir(self, tmp_path):
+        from powerhouse.data import ingest_fixtures
+
+        ingest_fixtures(RAW_DIR, tmp_path)
+        return tmp_path
+
+    def test_tiny_daily_loss_cap_blocks_plans_in_a_real_run(self, curated_dir):
+        from powerhouse.config import RiskConfig
+
+        engine = BacktestEngine(
+            curated_dir=curated_dir,
+            risk_config=RiskConfig(max_daily_loss_pct=0.0001),
+        )
+        result = engine.run(
+            symbols=["AAPL", "MSFT", "NVDA"],
+            start_date="2026-04-01",
+            end_date="2026-05-26",
+            phase=Phase.OPEN,
+        )
+
+        loss_blocked = [
+            d for d in result.risk_decisions if not d.daily_loss_check_passed
+        ]
+        assert loss_blocked, "expected at least one daily-loss rejection with a near-zero cap"
+        assert all(not d.approved for d in loss_blocked)
+        assert all("Daily loss cap exceeded" in d.reason for d in loss_blocked)
+
+    def test_generous_daily_loss_cap_does_not_spuriously_block(self, curated_dir):
+        from powerhouse.config import RiskConfig
+
+        engine = BacktestEngine(
+            curated_dir=curated_dir,
+            risk_config=RiskConfig(max_daily_loss_pct=100.0),
+        )
+        result = engine.run(
+            symbols=["AAPL", "MSFT", "NVDA"],
+            start_date="2026-04-01",
+            end_date="2026-05-26",
+            phase=Phase.OPEN,
+        )
+        assert all(d.daily_loss_check_passed for d in result.risk_decisions)
+
+
+@pytest.mark.unit
 class TestComputeMetrics:
     def test_empty_trades_returns_zeroed_metrics(self):
         from decimal import Decimal

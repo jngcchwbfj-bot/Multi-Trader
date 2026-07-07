@@ -12,6 +12,14 @@ all bars from D+1 onward, and its P&L is realized on day D for daily-loss
 and equity-curve accounting. There is no intraday, partial-day, or
 overlapping-position-in-the-same-symbol modeling. See docs/backtesting.md
 for the full list of limitations.
+
+Within a single simulated day, plans are risk-checked and simulated one at
+a time (not as a single batch decision followed by a batch of fills): each
+plan's risk check sees `portfolio.realized_pnl_today` as of the trades
+already closed earlier *that same day*, so the daily-loss cap can actually
+engage mid-day once enough losses have been realized. `realized_pnl_today`
+still resets to zero at the start of each new simulated day, which is the
+correct boundary for a *daily* cap.
 """
 
 import asyncio
@@ -151,11 +159,16 @@ class BacktestEngine:
                 execution_policy=policy,
                 portfolio=portfolio,
             )
-            decisions = await self.risk_agent.run(ctx, plans)
-            approved_ids = {d.plan_id for d in decisions if d.approved}
 
+            # Risk-check and simulate one plan at a time (not batch-decide then
+            # batch-simulate): this lets each plan's risk check see the P&L of
+            # trades already closed earlier the same day, so the daily-loss cap
+            # can actually stop later same-day plans once it's been hit.
+            day_decisions = []
             for plan in plans:
-                if plan.plan_id not in approved_ids:
+                decision = (await self.risk_agent.run(ctx, [plan]))[0]
+                day_decisions.append(decision)
+                if not decision.approved:
                     continue
                 bars = self._forward_bars(data[plan.ticker], as_of)
                 trade = self.simulator.run(plan, bars)
@@ -171,7 +184,7 @@ class BacktestEngine:
                     blocked_until[plan.ticker] = as_of  # resolved same step; symbol free next day
 
             all_plans.extend(plans)
-            all_decisions.extend(decisions)
+            all_decisions.extend(day_decisions)
             equity_curve.append(
                 {"date": str(as_of.date()), "equity": float(portfolio.account_value)}
             )
