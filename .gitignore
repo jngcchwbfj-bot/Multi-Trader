@@ -1,0 +1,93 @@
+# Environment
+.env
+.env.local
+.env*.local
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+
+# Testing
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.hypothesis/
+*.cover
+
+# Logs
+logs/
+*.log
+
+# Data and reports (but track structure)
+data/raw/*
+data/staged/*
+data/curated/*
+!data/raw/.gitkeep
+!data/staged/.gitkeep
+!data/curated/.gitkeep
+reports/daily/*
+reports/sessions/*
+reports/trades/*
+reports/backtests/*
+!reports/daily/.gitkeep
+!reports/sessions/.gitkeep
+!reports/trades/.gitkeep
+!reports/backtests/.gitkeep
+logs/app/*
+logs/sessions/*
+logs/execution/*
+!logs/app/.gitkeep
+!logs/sessions/.gitkeep
+!logs/execution/.gitkeep
+
+# Backtest outputs
+data/backtests/*
+!data/backtests/.gitkeep
+
+# Memory
+data/memory/*
+!data/memory/.gitkeep
+
+# Misc
+.mypy_cache/
+.dmypy.json
+dmypy.json
+*.bak
+*.tmp

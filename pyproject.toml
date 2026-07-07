@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "financial-powerhouse"
+version = "0.1.0"
+description = "Python-first multi-agent day-trading system with human-in-the-loop approval gates and backtesting support"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {text = "MIT"}
+authors = [
+    {name = "Financial Powerhouse Team", email = "team@example.com"}
+]
+
+dependencies = [
+    "pydantic>=2.0",
+    "typer[all]>=0.9",
+    "rich>=13.0",
+    "duckdb>=1.0",
+    "pyarrow>=14.0",
+    "pandas>=2.0",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "black>=23.0",
+]
+
+[project.scripts]
+powerhouse = "powerhouse.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/powerhouse"]
+
+[tool.pytest.ini_options]
+minversion = "7.0"
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+addopts = "-v --strict-markers --tb=short"
+markers = [
+    "unit: mark test as a unit test",
+    "integration: mark test as an integration test",
+    "regression: mark test as a regression test",
+    "slow: mark test as slow running",
+]
+
+[tool.mypy]
+python_version = "3.12"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+disallow_incomplete_defs = false
+
+[tool.black]
+line-length = 100
+target-version = ["py312"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+select = ["E", "F", "W", "I"]
+
+[tool.ruff.isort]
+known-first-party = ["powerhouse"]

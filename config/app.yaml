@@ -1,0 +1,17 @@
+# Application configuration
+
+timezone: "America/New_York"
+log_level: "INFO"
+environment: "development"
+
+# Session defaults
+session:
+  max_duration_seconds: 21600  # 6 hours
+  auto_shutdown_at_eod: true
+  require_human_approval: true
+
+# Portfolio defaults
+portfolio:
+  initial_cash: 100000
+  min_cash_reserve_pct: 20
+  max_long_exposure_pct: 80
