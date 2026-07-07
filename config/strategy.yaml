@@ -1,0 +1,8 @@
+# Strategy plan-generation rules
+
+default_risk_per_trade_pct: 0.5
+stop_atr_multiple: 1.0
+target_atr_multiple: 2.0
+trailing_stop_atr_multiple: 1.5
+enable_trailing_stop: true
+min_confidence: 0.4

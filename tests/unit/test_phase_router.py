@@ -1,10 +1,11 @@
 """Tests for phase router."""
 
-import pytest
 from datetime import datetime
 
+import pytest
+
 from powerhouse.core.enums import Phase
-from powerhouse.core.phase_router import PhaseRouter
+from powerhouse.core.phase_router import PhaseProfile, PhaseRouter
 
 
 @pytest.mark.unit
@@ -70,3 +71,31 @@ class TestPhaseRouter:
         # Just before midday (11:59:59 AM ET = 3:59:59 PM UTC)
         dt = datetime(2026, 7, 7, 15, 59, 59)
         assert PhaseRouter.resolve_phase(dt) == Phase.OPEN
+
+    def test_saturday_is_closed_even_during_market_hours(self):
+        # 2026-07-11 is a Saturday; 10 AM ET = 2 PM UTC
+        dt = datetime(2026, 7, 11, 14, 0, 0)
+        assert PhaseRouter.resolve_phase(dt) == Phase.CLOSED
+
+    def test_sunday_is_closed_even_during_market_hours(self):
+        # 2026-07-12 is a Sunday; 10 AM ET = 2 PM UTC
+        dt = datetime(2026, 7, 12, 14, 0, 0)
+        assert PhaseRouter.resolve_phase(dt) == Phase.CLOSED
+
+    def test_is_market_open_helper(self):
+        weekday_open = datetime(2026, 7, 7, 14, 0, 0)
+        weekend = datetime(2026, 7, 11, 14, 0, 0)
+        assert PhaseRouter.is_market_open(weekday_open) is True
+        assert PhaseRouter.is_market_open(weekend) is False
+
+    def test_get_profile_returns_phase_profile(self):
+        profile = PhaseRouter.get_profile(Phase.OPEN)
+        assert isinstance(profile, PhaseProfile)
+        assert profile.phase == Phase.OPEN
+        closed_profile = PhaseRouter.get_profile(Phase.CLOSED)
+        assert profile.scan_aggressiveness > closed_profile.scan_aggressiveness
+
+    def test_profiles_differ_by_phase(self):
+        open_profile = PhaseRouter.get_profile(Phase.OPEN)
+        eod_profile = PhaseRouter.get_profile(Phase.END_OF_DAY)
+        assert open_profile.max_position_count != eod_profile.max_position_count

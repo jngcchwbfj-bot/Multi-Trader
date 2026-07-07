@@ -1,0 +1,9 @@
+# Risk limits and exposure caps
+
+max_daily_loss_pct: 1.0
+max_per_trade_risk_pct: 0.5
+max_total_open_risk_pct: 2.0
+max_long_exposure_pct: 80.0
+min_cash_reserve_pct: 20.0
+allow_market_orders: false
+require_approval_per_trade: true

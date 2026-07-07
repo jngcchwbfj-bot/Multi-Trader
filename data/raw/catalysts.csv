@@ -1,0 +1,4 @@
+ticker,catalyst_type,summary,sentiment,confidence
+AAPL,technical,Strong support at 150 with rising volume,bullish,0.80
+MSFT,earnings,Cloud revenue growth expected to accelerate,bullish,0.75
+NVDA,macro,AI infrastructure spending cycle continues,bullish,0.70

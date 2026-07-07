@@ -1,7 +1,8 @@
 """Tests for risk agent."""
 
-import pytest
 from decimal import Decimal
+
+import pytest
 
 from powerhouse.agents.risk import RiskAgent
 from powerhouse.core.enums import OperatingMode, OrderSide, Phase

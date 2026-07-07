@@ -1,0 +1,8 @@
+# Backtest / replay engine assumptions
+
+data_dir: "data/curated"
+slippage_bps: 5.0
+commission_per_share: 0.0
+fill_on: "next_open"  # "next_open" or "same_close"
+max_holding_days: 5
+starting_cash: 100000

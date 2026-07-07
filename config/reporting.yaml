@@ -1,0 +1,7 @@
+# Reporting and artifact output rules
+
+reports_dir: "reports/sessions"
+artifacts_dir: "data/backtests"
+memory_dir: "data/memory"
+write_jsonl: true
+write_parquet: true

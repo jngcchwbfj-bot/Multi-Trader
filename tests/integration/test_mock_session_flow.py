@@ -1,7 +1,8 @@
 """Integration tests for mock session workflow."""
 
-import pytest
 from datetime import datetime, timezone
+
+import pytest
 
 from powerhouse.conductor.service import ConductorService
 from powerhouse.core.enums import OperatingMode, Phase, SessionStatus

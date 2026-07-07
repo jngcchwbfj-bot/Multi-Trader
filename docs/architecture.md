@@ -1,5 +1,12 @@
 # Architecture Overview
 
+> **Phase 2 status**: the backtest engine (`src/powerhouse/backtest/`), local
+> data layer (`src/powerhouse/data/`), typed config (`src/powerhouse/config/`),
+> execution simulator (`src/powerhouse/simulation/`), and memory store
+> (`src/powerhouse/memory/`) described below now exist and are wired in.
+> Live broker execution is still not implemented - see
+> [`docs/backtesting.md`](backtesting.md) and [`docs/risk-policy.md`](risk-policy.md).
+
 ## System Design Principles
 
 1. **Conductor-Specialist Pattern**: A central orchestrator (Conductor) manages workflow and calls narrow-purpose specialist agents.

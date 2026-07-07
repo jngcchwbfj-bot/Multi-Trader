@@ -1,0 +1,21 @@
+# Scanner candidate ranking rules
+
+universe:
+  - AAPL
+  - MSFT
+  - NVDA
+
+max_candidates: 5
+min_price: 1.0
+min_relevance_score: 0.0
+momentum_lookback_days: 5
+
+# How aggressive scanning is per market phase (0 = conservative, 1 = aggressive).
+# Higher aggressiveness widens the candidate list and lowers score thresholds.
+phase_aggressiveness:
+  premarket: 0.3
+  open: 0.9
+  midday: 0.5
+  power_hour: 0.7
+  end_of_day: 0.2
+  closed: 0.0

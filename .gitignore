@@ -62,6 +62,13 @@ data/curated/*
 !data/raw/.gitkeep
 !data/staged/.gitkeep
 !data/curated/.gitkeep
+
+# Committed synthetic fixtures (small, deterministic - not real market data).
+# Curated Parquet is a generated artifact and stays gitignored; run
+# `powerhouse ingest-fixtures` to (re)build it from these CSVs.
+!data/raw/ohlcv/
+!data/raw/ohlcv/*.csv
+!data/raw/catalysts.csv
 reports/daily/*
 reports/sessions/*
 reports/trades/*

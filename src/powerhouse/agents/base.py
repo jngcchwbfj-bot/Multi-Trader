@@ -1,7 +1,7 @@
 """Base class for specialist agents."""
 
 from abc import ABC, abstractmethod
-from typing import Any, Generic, TypeVar
+from typing import Generic, TypeVar
 
 from powerhouse.core.models import SessionContext
 

@@ -45,10 +45,12 @@ class ConductorService:
             result.candidates = await self.scanner.run(context)
 
             # Stage 2: Analyze catalysts
-            result.catalysts = await self.catalyst.run(context)
+            result.catalysts = await self.catalyst.run(context, result.candidates)
 
             # Stage 3: Create trade plans
-            result.trade_plans = await self.strategy.run(context)
+            result.trade_plans = await self.strategy.run(
+                context, result.candidates, result.catalysts
+            )
 
             # Stage 4: Risk validation
             result.risk_decisions = await self.risk.run(context, result.trade_plans)

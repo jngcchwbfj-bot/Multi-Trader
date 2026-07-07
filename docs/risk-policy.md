@@ -1,8 +1,15 @@
-# Risk Policy - Phase 1
+# Risk Policy - Phase 2
 
 ## Overview
 
-This document defines hard constraints enforced by the Financial Powerhouse system in Phase 1. These rules are **deterministic**, not LLM-based, and are checked at critical decision points.
+This document defines hard constraints enforced by the Financial Powerhouse system. These rules are **deterministic**, not LLM-based, and are checked at critical decision points.
+
+> **Phase 2 update**: the daily loss cap described below is now actually
+> enforced (Phase 1 hard-coded it as a no-op). Exposure checks use
+> *projected post-trade* exposure, not current exposure. A new total
+> open-risk cap and structural plan-validity checks were also added. See
+> `src/powerhouse/agents/risk.py` for the implementation and
+> `tests/unit/test_daily_loss.py` for enforcement tests.
 
 ## Core Principles
 
@@ -27,8 +34,14 @@ This document defines hard constraints enforced by the Financial Powerhouse syst
 ### 2. Daily Loss Cap
 
 - **Limit**: Losses in a session are capped at 1% of portfolio value.
-- **Action**: Once the daily loss limit is reached, no further orders are permitted.
+- **Tracking**: `Portfolio.realized_pnl_today` accumulates realized P&L from
+  simulated trade closes; `Portfolio.get_daily_loss_pct()` derives today's
+  loss as a positive percentage (0 on a profitable day).
+- **Action**: Once the daily loss limit is reached, no further orders are
+  permitted (`RiskAgent` vetoes with a `"Daily loss cap exceeded"` reason).
 - **Reporting**: All loss events are logged and reported.
+- **Reset**: `BacktestEngine` resets `realized_pnl_today` to zero at the
+  start of each simulated trading day.
 
 ### 3. Per-Trade Risk Limit
 
@@ -38,9 +51,16 @@ This document defines hard constraints enforced by the Financial Powerhouse syst
 
 ### 4. Exposure Cap
 
-- **Total Long Exposure**: No more than 80% of portfolio value.
-- **Total Short Exposure**: No short positions permitted in Phase 1.
+- **Total Long Exposure**: No more than 80% of portfolio value, checked
+  against **projected post-trade** exposure (current exposure + this
+  plan's notional value), not just current exposure. A veto looks like:
+  `Long exposure cap exceeded: projected 96.5% > cap 80.0%`.
+- **Total Short Exposure**: No short positions permitted.
 - **Cash Reserve**: Minimum 20% of portfolio must remain in cash.
+- **Total Open Risk Cap**: The sum of per-trade risk across all currently
+  open (approved) positions cannot exceed `max_total_open_risk_pct`
+  (default 2%). Approving a plan adds its risk to
+  `Portfolio.open_risk_amount`; closing a trade releases it.
 
 ### 5. Order Types
 
@@ -130,13 +150,15 @@ Every decision point is logged with:
 
 Logs are stored in `logs/execution/` in JSONL format for later audit and learning.
 
-## Phase 2 Outlook
+## Phase 3 Outlook
 
-Phase 2 will add:
+Phase 3 should add:
 
 - Tiered approval levels (risk-based auto-approval for tiny trades).
-- More sophisticated exposure tracking across strategies.
-- Multi-day risk rollup and correlation analysis.
+- Multi-day/multi-session risk rollup and correlation analysis across
+  strategies (today's tracking is single-session/single-backtest-run scoped).
 - Regulatory report generation.
+- A real broker adapter, still gated behind the same `allow_execution` check.
 
-Until then, everything is **manual**, **logged**, and **blocked by default**.
+Until then, everything is **simulated**, **logged**, and **blocked by
+default unless `allow_execution=True` and the risk layer approves**.
