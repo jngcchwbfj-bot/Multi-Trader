@@ -15,7 +15,7 @@ authors = [
 
 dependencies = [
     "pydantic>=2.0",
-    "typer[all]>=0.9",
+    "typer>=0.9",
     "rich>=13.0",
     "duckdb>=1.0",
     "pyarrow>=14.0",
@@ -23,7 +23,7 @@ dependencies = [
     "python-dotenv>=1.0",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.21",
@@ -44,6 +44,7 @@ minversion = "7.0"
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 addopts = "-v --strict-markers --tb=short"
+asyncio_mode = "auto"
 markers = [
     "unit: mark test as a unit test",
     "integration: mark test as an integration test",

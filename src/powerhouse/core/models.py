@@ -93,7 +93,7 @@ class TradePlan(BaseModel):
     risk_per_trade_pct: float = 0.5
     approval_status: ApprovalStatus = ApprovalStatus.PENDING
     approval_reason: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utc_now)
 
     def get_risk_amount(self, account_value: Decimal) -> Decimal:
         """Calculate risk amount in dollars."""
@@ -125,7 +125,7 @@ class Order(BaseModel):
     status: OrderStatus = OrderStatus.PENDING
     filled_quantity: int = 0
     filled_price: Optional[Decimal] = None
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utc_now)
     submitted_at: Optional[datetime] = None
     filled_at: Optional[datetime] = None
 
@@ -141,7 +141,7 @@ class RiskDecision(BaseModel):
     daily_loss_check_passed: bool
     exposure_check_passed: bool
     per_trade_risk_check_passed: bool
-    decided_at: datetime = Field(default_factory=datetime.utcnow)
+    decided_at: datetime = Field(default_factory=_utc_now)
 
 
 class ExecutedTrade(BaseModel):
@@ -179,7 +179,7 @@ class SessionReport(BaseModel):
     session_id: str = ""
     status: SessionStatus = SessionStatus.PENDING
     phase: Phase = Phase.CLOSED
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utc_now)
     duration_seconds: float = 0.0
     candidates_found: int = 0
     trade_plans_proposed: int = 0
@@ -189,7 +189,7 @@ class SessionReport(BaseModel):
     total_pnl: Optional[Decimal] = None
     error_message: Optional[str] = None
     markdown_report: str = ""
-    created_at: datetime = Field(default_factory=datetime.utcnow)
+    created_at: datetime = Field(default_factory=_utc_now)
 
 
 class SessionResult(BaseModel):
@@ -209,7 +209,7 @@ class SessionResult(BaseModel):
 class LogEntry(BaseModel):
     """A structured log entry."""
 
-    timestamp: datetime = Field(default_factory=datetime.utcnow)
+    timestamp: datetime = Field(default_factory=_utc_now)
     level: str  # INFO, WARNING, ERROR
     event_type: str
     session_id: str
